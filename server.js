@@ -171,15 +171,17 @@ app.get('/api/airport-flights', async (req, res) => {
       ...(data.enroute || []),
     ];
 
-    // Extract the airline code from the flight ident (e.g. "DAL123" -> "DAL").
-    const extractAirlineCode = (ident) => (ident || '').match(/^[A-Z]{2,3}/)?.[0] || '';
-
     let simplified = allFlights.map(f => {
       const ident = f.ident || f.flight_number || '';
       return {
         flightNumber: ident,
         faFlightId: f.fa_flight_id || '',
-        airline: extractAirlineCode(ident),
+        // AeroAPI gives explicit operator codes — use those directly rather
+        // than guessing from the ident string, since airlines are commonly
+        // entered by their IATA code (2 letters, e.g. "KE") which often
+        // differs from the ICAO code embedded in the ident (e.g. "KAL123").
+        operatorIcao: (f.operator_icao || '').toUpperCase(),
+        operatorIata: (f.operator_iata || f.operator || '').toUpperCase(),
         origin: f.origin ? f.origin.code : '',
         destination: f.destination ? f.destination.code : '',
         scheduledDeparture: f.scheduled_out || f.scheduled_off || '',
@@ -204,8 +206,26 @@ app.get('/api/airport-flights', async (req, res) => {
     });
 
     if (airlineFilter) {
-      simplified = simplified.filter(f => airlineFilter.includes(f.airline));
+      simplified = simplified.filter(f =>
+        airlineFilter.includes(f.operatorIcao) || airlineFilter.includes(f.operatorIata)
+      );
     }
+
+    // The board just wants one "airline" code to display/match against —
+    // prefer whichever one the caller's filter actually matched, falling
+    // back to ICAO then IATA.
+    simplified = simplified.map(f => ({
+      flightNumber: f.flightNumber,
+      faFlightId: f.faFlightId,
+      airline: (airlineFilter && airlineFilter.includes(f.operatorIata)) ? f.operatorIata : (f.operatorIcao || f.operatorIata),
+      origin: f.origin,
+      destination: f.destination,
+      scheduledDeparture: f.scheduledDeparture,
+      scheduledArrival: f.scheduledArrival,
+      arrGate: f.arrGate,
+      depGate: f.depGate,
+      status: f.status
+    }));
 
     res.json({ airport, count: simplified.length, flights: simplified });
   } catch (err) {
