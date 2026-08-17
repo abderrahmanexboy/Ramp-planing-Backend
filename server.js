@@ -235,7 +235,7 @@ app.get('/api/airport-flights', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// GET /api/scheduled-flights?airport=KBOS&airlines=DAL,JBU&start=2026-08-20&end=2026-08-21
+// GET /api/scheduled-flights?airport=KBOS&airlines=DAL,JBU&start=2026-08-20&end=2026-08-21&direction=arrivals
 //
 // For FUTURE dates. Uses AeroAPI's Published Schedules resource
 // (/schedules/{start}/{end}), which is separate from /airports/{id}/flights —
@@ -246,17 +246,19 @@ app.get('/api/airport-flights', async (req, res) => {
 //      arrGate/depGate to come back empty for anything beyond a day or two.
 //   2. Schedules are provisional and can change closer to the actual day.
 //
-// start/end are calendar dates (YYYY-MM-DD). Because /schedules only
-// filters by a single origin OR destination per call, this makes TWO
-// calls per airline (one for departures from the airport, one for
-// arrivals into it) — mind your AeroAPI usage on multi-airline / wide
-// date-range requests.
+// start/end are calendar dates (YYYY-MM-DD). `direction` is optional:
+//   'arrivals'   -> only flights landing AT the airport
+//   'departures' -> only flights leaving FROM the airport
+//   (anything else / omitted) -> both, which costs 2 AeroAPI calls per
+//   airline instead of 1 — mind your usage on multi-airline / wide
+//   date-range requests either way.
 // ---------------------------------------------------------------------
 app.get('/api/scheduled-flights', async (req, res) => {
   const airport = (req.query.airport || '').trim();
   const airlinesParam = (req.query.airlines || '').trim();
   const start = (req.query.start || '').trim();
   const end = (req.query.end || '').trim();
+  const direction = (req.query.direction || 'both').trim().toLowerCase();
   const airlineCodes = airlinesParam ? airlinesParam.split(',').map(a => a.trim()).filter(Boolean) : [];
 
   if (!airport || !start || !end || airlineCodes.length === 0) {
@@ -266,12 +268,19 @@ app.get('/api/scheduled-flights', async (req, res) => {
     return res.status(500).json({ error: 'Server is missing AEROAPI_KEY — set it as an environment variable.' });
   }
 
+  // 'destination' = flights landing AT the airport (arrivals);
+  // 'origin' = flights leaving FROM the airport (departures).
+  const directionParams =
+    direction === 'arrivals' ? ['destination'] :
+    direction === 'departures' ? ['origin'] :
+    ['origin', 'destination'];
+
   const seen = new Set();
   const allFlights = [];
   const errors = [];
 
   for (const code of airlineCodes) {
-    for (const directionParam of ['origin', 'destination']) {
+    for (const directionParam of directionParams) {
       try {
         const params = new URLSearchParams({ airline: code, [directionParam]: airport });
         const url = `${AEROAPI_BASE}/schedules/${start}/${end}?${params.toString()}`;
