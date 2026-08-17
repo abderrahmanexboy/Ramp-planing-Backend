@@ -292,6 +292,14 @@ app.get('/api/scheduled-flights', async (req, res) => {
         }
         const data = await response.json();
         const scheduled = data.scheduled || [];
+        // Each /schedules record is ONE leg of a flight (e.g. Boston -> City X,
+        // or City Y -> Boston) — it is NOT a full turnaround at this airport.
+        // scheduled_out is when it leaves its ORIGIN, scheduled_in is when it
+        // lands at its DESTINATION. Only one of those two times is actually
+        // about THIS airport, depending on which query found it — the other
+        // belongs to a completely different city and must not be shown as if
+        // it were this flight's Boston time.
+        const isArrivalHere = directionParam === 'destination';
         scheduled.forEach(f => {
           const key = f.fa_flight_id || (f.ident + '-' + f.scheduled_out);
           if (seen.has(key)) return;
@@ -302,8 +310,11 @@ app.get('/api/scheduled-flights', async (req, res) => {
             airline: code,
             origin: f.origin_iata || f.origin || '',
             destination: f.destination_iata || f.destination || '',
-            scheduledDeparture: f.scheduled_out || '',
-            scheduledArrival: f.scheduled_in || '',
+            direction: isArrivalHere ? 'arrival' : 'departure',
+            // Only the time relevant to THIS airport is included — the other
+            // is left blank rather than filled with an unrelated city's time.
+            scheduledArrival: isArrivalHere ? (f.scheduled_in || '') : '',
+            scheduledDeparture: isArrivalHere ? '' : (f.scheduled_out || ''),
             arrGate: '', // not published this far ahead — fill in manually once known
             depGate: '',
             status: 'Scheduled'
