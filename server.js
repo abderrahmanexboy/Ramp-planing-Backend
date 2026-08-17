@@ -300,7 +300,31 @@ app.get('/api/scheduled-flights', async (req, res) => {
         // belongs to a completely different city and must not be shown as if
         // it were this flight's Boston time.
         const isArrivalHere = directionParam === 'destination';
+        // Normalizes an airport code so "KBOS" and "BOS" compare equal —
+        // most continental US airports' ICAO code is just "K" + the IATA
+        // code, but AeroAPI doesn't always provide both fields on every
+        // record, so comparing the raw strings directly can miss genuine
+        // matches.
+        const airportCore = (code) => {
+          if (!code) return '';
+          const c = code.toUpperCase();
+          return (c.length === 4 && c.startsWith('K')) ? c.slice(1) : c;
+        };
+        const airportUpperCore = airportCore(airport);
         scheduled.forEach(f => {
+          // AeroAPI's own origin/destination filter on this endpoint isn't
+          // fully reliable — it can return flights that don't actually touch
+          // the requested airport at all. Independently verify using the
+          // airport codes actually present on the flight record itself
+          // (checking both ICAO and IATA forms) before trusting it.
+          const relevantCodes = isArrivalHere
+            ? [f.destination, f.destination_icao, f.destination_iata]
+            : [f.origin, f.origin_icao, f.origin_iata];
+          const actuallyMatchesAirport = relevantCodes
+            .filter(Boolean)
+            .some(c => airportCore(c) === airportUpperCore);
+          if (!actuallyMatchesAirport) return; // discard — not really a Boston flight
+
           const key = f.fa_flight_id || (f.ident + '-' + f.scheduled_out);
           if (seen.has(key)) return;
           seen.add(key);
