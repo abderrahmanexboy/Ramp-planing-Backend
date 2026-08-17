@@ -107,7 +107,8 @@ app.get('/api/flights', async (req, res) => {
       destination: f.destination ? f.destination.code : '',
       scheduledDeparture: f.scheduled_out || f.scheduled_off || '',
       scheduledArrival: f.scheduled_in || f.scheduled_on || '',
-      gate: f.gate_origin || f.gate_destination || '',
+      arrGate: f.gate_destination || '',
+      depGate: f.gate_origin || '',
       status: f.status || ''
     }));
 
@@ -176,7 +177,11 @@ app.get('/api/airport-flights', async (req, res) => {
         destination: f.destination ? f.destination.code : '',
         scheduledDeparture: f.scheduled_out || f.scheduled_off || '',
         scheduledArrival: f.scheduled_in || f.scheduled_on || '',
-        gate: f.gate_origin || f.gate_destination || '',
+        // gate_destination = gate at this flight's destination (its arrival gate);
+        // gate_origin = gate at this flight's origin (its departure gate).
+        // AeroAPI usually only populates whichever one is relevant to this leg.
+        arrGate: f.gate_destination || '',
+        depGate: f.gate_origin || '',
         status: f.status || ''
       };
     });
