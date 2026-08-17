@@ -128,6 +128,8 @@ app.get('/api/flights', async (req, res) => {
 app.get('/api/airport-flights', async (req, res) => {
   const airport = (req.query.airport || '').trim();
   const airlinesParam = (req.query.airlines || '').trim();
+  const start = (req.query.start || '').trim(); // optional ISO8601, e.g. 2026-08-17T00:00:00Z
+  const end = (req.query.end || '').trim();     // optional ISO8601 — pass both to widen the window (AeroAPI allows up to a few days out)
   const airlineFilter = airlinesParam
     ? airlinesParam.split(',').map(a => a.trim().toUpperCase()).filter(Boolean)
     : null;
@@ -140,7 +142,11 @@ app.get('/api/airport-flights', async (req, res) => {
   }
 
   try {
-    const url = `${AEROAPI_BASE}/airports/${encodeURIComponent(airport)}/flights`;
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const qs = params.toString();
+    const url = `${AEROAPI_BASE}/airports/${encodeURIComponent(airport)}/flights${qs ? '?' + qs : ''}`;
     const response = await fetch(url, {
       headers: { 'x-apikey': AEROAPI_KEY }
     });
@@ -172,6 +178,7 @@ app.get('/api/airport-flights', async (req, res) => {
       const ident = f.ident || f.flight_number || '';
       return {
         flightNumber: ident,
+        faFlightId: f.fa_flight_id || '',
         airline: extractAirlineCode(ident),
         origin: f.origin ? f.origin.code : '',
         destination: f.destination ? f.destination.code : '',
@@ -201,6 +208,74 @@ app.get('/api/airport-flights', async (req, res) => {
     }
 
     res.json({ airport, count: simplified.length, flights: simplified });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to reach AeroAPI', details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /api/flight-status?faFlightId=XXXX   (preferred — exact flight instance)
+//     or  /api/flight-status?ident=DAL123  (falls back to that ident's most
+//     recent/current flight, less precise if the airline flies that number
+//     more than once a day)
+//
+// Meant to be polled periodically by the board once a flight has taken off,
+// to pull in actual/estimated times and current status. NOTE: each call
+// costs against your AeroAPI usage — polling many flights frequently adds
+// up fast. Keep the polling interval conservative (minutes, not seconds).
+// ---------------------------------------------------------------------
+app.get('/api/flight-status', async (req, res) => {
+  const faFlightId = (req.query.faFlightId || '').trim();
+  const ident = (req.query.ident || '').trim();
+
+  if (!faFlightId && !ident) {
+    return res.status(400).json({ error: 'Provide either faFlightId or ident.' });
+  }
+  if (!AEROAPI_KEY) {
+    return res.status(500).json({ error: 'Server is missing AEROAPI_KEY — set it as an environment variable.' });
+  }
+
+  try {
+    const lookupId = faFlightId || ident;
+    const url = `${AEROAPI_BASE}/flights/${encodeURIComponent(lookupId)}`;
+    const response = await fetch(url, {
+      headers: { 'x-apikey': AEROAPI_KEY }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({
+        error: `AeroAPI returned ${response.status}`,
+        details: text
+      });
+    }
+
+    const data = await response.json();
+    const flights = data.flights || [];
+    // If looked up by faFlightId, there should be exactly one match; if by
+    // ident, take the most current one (first in the list).
+    const f = faFlightId
+      ? (flights.find(x => x.fa_flight_id === faFlightId) || flights[0])
+      : flights[0];
+
+    if (!f) {
+      return res.status(404).json({ error: 'No matching flight found.' });
+    }
+
+    res.json({
+      flightNumber: f.ident || '',
+      faFlightId: f.fa_flight_id || '',
+      status: f.status || '',
+      scheduledDeparture: f.scheduled_out || f.scheduled_off || '',
+      estimatedDeparture: f.estimated_out || f.estimated_off || '',
+      actualDeparture: f.actual_out || f.actual_off || '',
+      scheduledArrival: f.scheduled_in || f.scheduled_on || '',
+      estimatedArrival: f.estimated_in || f.estimated_on || '',
+      actualArrival: f.actual_in || f.actual_on || '',
+      arrGate: f.gate_destination || '',
+      depGate: f.gate_origin || '',
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to reach AeroAPI', details: err.message });
