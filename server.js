@@ -118,8 +118,92 @@ app.get('/api/flights', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------
+// GET /api/airport-flights?airport=KBOS&airlines=DAL,JBU,AAL
+// Returns flights at a specific airport, optionally filtered down to
+// only the airline codes you list (comma-separated ICAO codes). Leave
+// `airlines` off to get everyone at that airport.
+// ---------------------------------------------------------------------
+app.get('/api/airport-flights', async (req, res) => {
+  const airport = (req.query.airport || '').trim();
+  const airlinesParam = (req.query.airlines || '').trim();
+  const airlineFilter = airlinesParam
+    ? airlinesParam.split(',').map(a => a.trim().toUpperCase()).filter(Boolean)
+    : null;
+
+  if (!airport) {
+    return res.status(400).json({ error: 'Missing required query param: airport (ICAO code, e.g. KBOS for Boston Logan)' });
+  }
+  if (!AEROAPI_KEY) {
+    return res.status(500).json({ error: 'Server is missing AEROAPI_KEY — set it as an environment variable.' });
+  }
+
+  try {
+    const url = `${AEROAPI_BASE}/airports/${encodeURIComponent(airport)}/flights`;
+    const response = await fetch(url, {
+      headers: { 'x-apikey': AEROAPI_KEY }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({
+        error: `AeroAPI returned ${response.status}`,
+        details: text
+      });
+    }
+
+    const data = await response.json();
+
+    // AeroAPI's airport endpoint can bucket flights under a few different
+    // keys depending on status — gather whatever is present.
+    const allFlights = [
+      ...(data.arrivals || []),
+      ...(data.departures || []),
+      ...(data.scheduled_arrivals || []),
+      ...(data.scheduled_departures || []),
+      ...(data.enroute || []),
+    ];
+
+    // Extract the airline code from the flight ident (e.g. "DAL123" -> "DAL").
+    const extractAirlineCode = (ident) => (ident || '').match(/^[A-Z]{2,3}/)?.[0] || '';
+
+    let simplified = allFlights.map(f => {
+      const ident = f.ident || f.flight_number || '';
+      return {
+        flightNumber: ident,
+        airline: extractAirlineCode(ident),
+        origin: f.origin ? f.origin.code : '',
+        destination: f.destination ? f.destination.code : '',
+        scheduledDeparture: f.scheduled_out || f.scheduled_off || '',
+        scheduledArrival: f.scheduled_in || f.scheduled_on || '',
+        gate: f.gate_origin || f.gate_destination || '',
+        status: f.status || ''
+      };
+    });
+
+    // De-dupe (airport endpoint can return the same flight in more than
+    // one bucket, e.g. both "arrivals" and "scheduled_arrivals").
+    const seen = new Set();
+    simplified = simplified.filter(f => {
+      const key = f.flightNumber + f.scheduledDeparture;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    if (airlineFilter) {
+      simplified = simplified.filter(f => airlineFilter.includes(f.airline));
+    }
+
+    res.json({ airport, count: simplified.length, flights: simplified });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to reach AeroAPI', details: err.message });
+  }
+});
+
 app.get('/', (req, res) => {
-  res.send('Ramp Board AeroAPI backend is running. Try /api/flights?airline=DAL');
+  res.send('Ramp Board AeroAPI backend is running. Try /api/airport-flights?airport=KBOS&airlines=DAL,JBU');
 });
 
 app.listen(PORT, () => {
