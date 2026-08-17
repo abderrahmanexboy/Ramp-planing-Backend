@@ -38,12 +38,15 @@ if (!AEROAPI_KEY) {
 
 // ---------------------------------------------------------------------
 // CORS: only allow your board's actual domain(s) to call this server.
-// Replace these placeholder origins with wherever you end up hosting
-// the board (e.g. your Netlify URL, or your WordPress domain).
+// Add your real hosted domain here once you have one (e.g. your Netlify
+// URL or WordPress domain). 'null' is included because opening the board
+// as a local file (file:///...) sends Origin: null — remove that once
+// you're only using a real hosted URL, for tighter security.
 // ---------------------------------------------------------------------
 const ALLOWED_ORIGINS = [
   'https://your-board-domain.com',
   'http://localhost:3000', // handy for local testing
+  'null', // allows opening the board directly as a local file for now
 ];
 
 app.use(cors({
