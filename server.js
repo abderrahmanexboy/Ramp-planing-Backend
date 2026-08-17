@@ -235,6 +235,82 @@ app.get('/api/airport-flights', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// GET /api/scheduled-flights?airport=KBOS&airlines=DAL,JBU&start=2026-08-20&end=2026-08-21
+//
+// For FUTURE dates. Uses AeroAPI's Published Schedules resource
+// (/schedules/{start}/{end}), which is separate from /airports/{id}/flights —
+// that one reflects live/current operational tracking (today-ish), while
+// this one is the airline's advance published timetable, available up to
+// about a year out. Two honest limitations of this data source:
+//   1. Gate assignments usually aren't published this far ahead — expect
+//      arrGate/depGate to come back empty for anything beyond a day or two.
+//   2. Schedules are provisional and can change closer to the actual day.
+//
+// start/end are calendar dates (YYYY-MM-DD). Because /schedules only
+// filters by a single origin OR destination per call, this makes TWO
+// calls per airline (one for departures from the airport, one for
+// arrivals into it) — mind your AeroAPI usage on multi-airline / wide
+// date-range requests.
+// ---------------------------------------------------------------------
+app.get('/api/scheduled-flights', async (req, res) => {
+  const airport = (req.query.airport || '').trim();
+  const airlinesParam = (req.query.airlines || '').trim();
+  const start = (req.query.start || '').trim();
+  const end = (req.query.end || '').trim();
+  const airlineCodes = airlinesParam ? airlinesParam.split(',').map(a => a.trim()).filter(Boolean) : [];
+
+  if (!airport || !start || !end || airlineCodes.length === 0) {
+    return res.status(400).json({ error: 'Missing required params: airport, start, end (YYYY-MM-DD), airlines' });
+  }
+  if (!AEROAPI_KEY) {
+    return res.status(500).json({ error: 'Server is missing AEROAPI_KEY — set it as an environment variable.' });
+  }
+
+  const seen = new Set();
+  const allFlights = [];
+  const errors = [];
+
+  for (const code of airlineCodes) {
+    for (const directionParam of ['origin', 'destination']) {
+      try {
+        const params = new URLSearchParams({ airline: code, [directionParam]: airport });
+        const url = `${AEROAPI_BASE}/schedules/${start}/${end}?${params.toString()}`;
+        const response = await fetch(url, { headers: { 'x-apikey': AEROAPI_KEY } });
+        if (!response.ok) {
+          const text = await response.text();
+          errors.push(`${code} (${directionParam}=${airport}): ${response.status} ${text.slice(0,150)}`);
+          continue;
+        }
+        const data = await response.json();
+        const scheduled = data.scheduled || [];
+        scheduled.forEach(f => {
+          const key = f.fa_flight_id || (f.ident + '-' + f.scheduled_out);
+          if (seen.has(key)) return;
+          seen.add(key);
+          allFlights.push({
+            flightNumber: f.ident || '',
+            faFlightId: f.fa_flight_id || '',
+            airline: code,
+            origin: f.origin_iata || f.origin || '',
+            destination: f.destination_iata || f.destination || '',
+            scheduledDeparture: f.scheduled_out || '',
+            scheduledArrival: f.scheduled_in || '',
+            arrGate: '', // not published this far ahead — fill in manually once known
+            depGate: '',
+            status: 'Scheduled'
+          });
+        });
+      } catch (err) {
+        errors.push(`${code} (${directionParam}=${airport}): ${err.message}`);
+      }
+    }
+  }
+
+  res.json({ airport, start, end, count: allFlights.length, flights: allFlights, errors: errors.length ? errors : undefined });
+});
+
+
+// ---------------------------------------------------------------------
 // GET /api/flight-status?faFlightId=XXXX   (preferred — exact flight instance)
 //     or  /api/flight-status?ident=DAL123  (falls back to that ident's most
 //     recent/current flight, less precise if the airline flies that number
@@ -303,7 +379,7 @@ app.get('/api/flight-status', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.send('Ramp Board AeroAPI backend is running. Try /api/airport-flights?airport=KBOS&airlines=DAL,JBU');
+  res.send('Ramp Board AeroAPI backend is running. Live: /api/airport-flights?airport=KBOS&airlines=DAL,JBU — Future dates: /api/scheduled-flights?airport=KBOS&airlines=DAL,JBU&start=2026-08-20&end=2026-08-21');
 });
 
 app.listen(PORT, () => {
