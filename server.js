@@ -328,8 +328,19 @@ app.get('/api/scheduled-flights', async (req, res) => {
           const key = f.fa_flight_id || (f.ident + '-' + f.scheduled_out);
           if (seen.has(key)) return;
           seen.add(key);
+          // Prefer the ACTUAL operating flight's IATA code over the marketing
+          // ident. Codeshares (e.g. a partner airline's number sold under
+          // this carrier's brand) show up with `ident` as the marketing
+          // number and `actual_ident*` as the real operating flight — using
+          // `ident` alone can surface a number that doesn't correspond to
+          // an actual direct segment. Also prefer IATA format (2-letter,
+          // e.g. "TP215") over ICAO (3-letter, e.g. "TAP215") since that's
+          // the format ramp ops actually uses day to day.
+          const flightNumber =
+            f.actual_ident_iata || f.ident_iata ||
+            f.actual_ident || f.ident || '';
           allFlights.push({
-            flightNumber: f.ident || '',
+            flightNumber,
             faFlightId: f.fa_flight_id || '',
             airline: code,
             origin: f.origin_iata || f.origin || '',
