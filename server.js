@@ -279,12 +279,31 @@ app.get('/api/scheduled-flights', async (req, res) => {
   const allFlights = [];
   const errors = [];
 
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  // AeroAPI's Personal tier caps requests at roughly 10/minute. Fetching
+  // several airlines fires many requests back to back, which can blow
+  // through that limit mid-fetch and cause SOME of them to silently fail
+  // (partial results) even though the overall call still "succeeds."
+  // Spacing requests ~6.5s apart keeps this comfortably under 10/min.
+  const REQUEST_SPACING_MS = 6500;
+  let requestCount = 0;
+
   for (const code of airlineCodes) {
     for (const directionParam of directionParams) {
+      if (requestCount > 0) await sleep(REQUEST_SPACING_MS);
+      requestCount++;
       try {
         const params = new URLSearchParams({ airline: code, [directionParam]: airport });
         const url = `${AEROAPI_BASE}/schedules/${start}/${end}?${params.toString()}`;
-        const response = await fetch(url, { headers: { 'x-apikey': AEROAPI_KEY } });
+        let response = await fetch(url, { headers: { 'x-apikey': AEROAPI_KEY } });
+
+        // One retry on rate-limit specifically, after a longer pause —
+        // covers the case where we're still slightly over the limit.
+        if (response.status === 429) {
+          await sleep(15000);
+          response = await fetch(url, { headers: { 'x-apikey': AEROAPI_KEY } });
+        }
+
         if (!response.ok) {
           const text = await response.text();
           errors.push(`${code} (${directionParam}=${airport}): ${response.status} ${text.slice(0,150)}`);
