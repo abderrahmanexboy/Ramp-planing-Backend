@@ -343,6 +343,15 @@ app.get('/api/scheduled-flights', async (req, res) => {
           // confusing airline/number pairing.
           if (flightNumber && !flightNumber.toUpperCase().startsWith(code.toUpperCase())) return;
 
+          // Exclude codeshares actually OPERATED by a different airline.
+          // `actual_ident*` is only present when this flight is a codeshare;
+          // when it is, that field tells you who's really flying the plane.
+          // If that's a different carrier than the one being searched for,
+          // this isn't really "that airline's" flight — it's a partner's
+          // aircraft sold under this airline's brand — so leave it out.
+          const actualOperatorIdent = f.actual_ident_iata || f.actual_ident || '';
+          if (actualOperatorIdent && !actualOperatorIdent.toUpperCase().startsWith(code.toUpperCase())) return;
+
           allFlights.push({
             flightNumber,
             faFlightId: f.fa_flight_id || '',
